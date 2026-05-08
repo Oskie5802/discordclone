@@ -13,6 +13,7 @@ export function useWebRTC(roomId: string, userId: string, userName: string) {
   const [peers, setPeers] = useState<PeerConnection[]>([]);
   const [messages, setMessages] = useState<{ id: string, text: string, senderName: string, senderId: string, timestamp: number }[]>([]);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const [localStream, setLocalStreamState] = useState<MediaStream | null>(null);
   const peersRef = useRef<PeerConnection[]>([]);
 
   // We need a stable reference to socket to use in callbacks without re-capturing
@@ -137,7 +138,12 @@ export function useWebRTC(roomId: string, userId: string, userName: string) {
 
         s.emit('signal', { to: peerId, from: s.id, signal: { type: 'answer', sdp: answer, userName } });
       } else if (pc) {
-        if (signal.type === 'answer') {
+        if (signal.type === 'offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          s.emit('signal', { to: peerId, from: s.id, signal: { type: 'answer', sdp: answer, userName } });
+        } else if (signal.type === 'answer') {
           await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
           setPeerName(peerId, signal.userName);
         } else if (signal.candidate) {
@@ -185,6 +191,7 @@ export function useWebRTC(roomId: string, userId: string, userName: string) {
         : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       
       localStreamRef.current = stream;
+      setLocalStreamState(stream);
       
       // Update all existing peer connections with new tracks
       peersRef.current.forEach(peer => {
@@ -197,9 +204,9 @@ export function useWebRTC(roomId: string, userId: string, userName: string) {
         });
       });
 
-      // Need WebRTC negotiation again, but for a simple demo we can restart ice
+      // Need WebRTC negotiation again
       peersRef.current.forEach(async (peer) => {
-        const offer = await peer.pc.createOffer({ iceRestart: true });
+        const offer = await peer.pc.createOffer();
         await peer.pc.setLocalDescription(offer);
         if (socketRef.current) {
           socketRef.current.emit('signal', { to: peer.peerId, from: socketRef.current.id, signal: { type: 'offer', sdp: offer, userName } });
@@ -216,9 +223,23 @@ export function useWebRTC(roomId: string, userId: string, userName: string) {
   const stopMedia = () => {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(t => t.stop());
-      localStreamRef.current = null;
       
-      // Notify peers to remove tracks if possible
+      // Remove tracks from peer connections
+      peersRef.current.forEach(peer => {
+        peer.pc.getSenders().forEach(sender => peer.pc.removeTrack(sender));
+      });
+
+      // Renegotiate after removal
+      peersRef.current.forEach(async (peer) => {
+        const offer = await peer.pc.createOffer();
+        await peer.pc.setLocalDescription(offer);
+        if (socketRef.current) {
+          socketRef.current.emit('signal', { to: peer.peerId, from: socketRef.current.id, signal: { type: 'offer', sdp: offer, userName } });
+        }
+      });
+
+      localStreamRef.current = null;
+      setLocalStreamState(null);
     }
   };
 
@@ -228,6 +249,6 @@ export function useWebRTC(roomId: string, userId: string, userName: string) {
     sendMessage,
     startMedia,
     stopMedia,
-    localStream: localStreamRef.current
+    localStream
   };
 }
