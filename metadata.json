@@ -1,0 +1,6 @@
+{
+  "name": "Disclone",
+  "description": "Discord clone with real-time text, voice, and screen sharing",
+  "requestFramePermissions": ["camera", "microphone", "display-capture"],
+  "majorCapabilities": []
+}
