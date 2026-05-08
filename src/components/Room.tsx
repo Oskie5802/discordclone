@@ -27,10 +27,10 @@ export function Room({ roomId, userName }: { roomId: string, userName: string })
 
   const toggleVideo = async () => {
     if (sharing === 'video') {
-      stopMedia();
+      await stopMedia();
       setSharing(null);
     } else {
-      stopMedia();
+      await stopMedia();
       const stream = await startMedia(false);
       if (stream) setSharing('video');
     }
@@ -38,10 +38,10 @@ export function Room({ roomId, userName }: { roomId: string, userName: string })
 
   const toggleScreen = async () => {
     if (sharing === 'screen') {
-      stopMedia();
+      await stopMedia();
       setSharing(null);
     } else {
-      stopMedia();
+      await stopMedia();
       const stream = await startMedia(true);
       if (stream) setSharing('screen');
     }

@@ -57,74 +57,44 @@ export function useWebRTC(roomId: string, userId: string, userName: string) {
   useEffect(() => {
     if (!roomId || !userId) return;
 
-    // Connect to WebSockets
-    const s = io(window.location.origin);
-    setSocket(s);
-    socketRef.current = s;
+    let s: Socket | null = null;
 
-    s.on('connect', () => {
-      s.emit('join-room', roomId, userId, userName);
-    });
-
-    s.on('user-connected', async ({ userId: newUserId, userName: newUserName, socketId: newSocketId }) => {
-      console.log('New user connected:', newUserId, newUserName);
-      // We are the existing user, we create an offer to the new user.
-      // But actually, we need a reliable way to map socket IDs to user IDs.
-      // Let's use the socketId as the peerId for signaling logic to avoid confusion.
-      const peerId = newSocketId;
-      
-      const pc = new RTCPeerConnection(getIceConfig());
-      
-      // Add local tracks to peer connection
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(track => {
-          if (localStreamRef.current) {
-            pc.addTrack(track, localStreamRef.current);
-          }
-        });
+    const initMediaAndSocket = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        localStreamRef.current = stream;
+        setLocalStreamState(stream);
+      } catch (e) {
+        console.error('Failed to get mic initially', e);
       }
 
-      pc.onicecandidate = event => {
-        if (event.candidate) {
-          s.emit('signal', { to: peerId, from: s.id, signal: { candidate: event.candidate } });
-        }
-      };
+      // Connect to WebSockets
+      s = io(window.location.origin);
+      setSocket(s);
+      socketRef.current = s;
 
-      pc.ontrack = event => {
-        setPeerStream(peerId, event.streams[0]);
-      };
+      s.on('connect', () => {
+        s!.emit('join-room', roomId, userId, userName);
+      });
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      // Tell them our name inside the signal or keep it simple.
-      s.emit('signal', { to: peerId, from: s.id, signal: { type: 'offer', sdp: offer, userName } });
-      
-      addPeer(peerId, pc, newUserName);
-    });
-
-    s.on('signal', async (data) => {
-      const { signal, from } = data;
-      const peerId = from;
-      
-      let pc = peersRef.current.find(p => p.peerId === peerId)?.pc;
-
-      if (!pc && signal.type === 'offer') {
-        // We are the new user receiving an offer
-        pc = new RTCPeerConnection(getIceConfig());
-        addPeer(peerId, pc, signal.userName);
-
+      s.on('user-connected', async ({ userId: newUserId, userName: newUserName, socketId: newSocketId }) => {
+        console.log('New user connected:', newUserId, newUserName);
+        // We are the existing user, we create an offer to the new user.
+        // Let's use the socketId as the peerId for signaling logic to avoid confusion.
+        const peerId = newSocketId;
+        
+        const pc = new RTCPeerConnection(getIceConfig());
+        
+        // Add local tracks to peer connection
         if (localStreamRef.current) {
           localStreamRef.current.getTracks().forEach(track => {
-             if (localStreamRef.current) {
-               pc!.addTrack(track, localStreamRef.current);
-             }
+            pc.addTrack(track, localStreamRef.current!);
           });
         }
 
         pc.onicecandidate = event => {
           if (event.candidate) {
-            s.emit('signal', { to: peerId, from: s.id, signal: { candidate: event.candidate } });
+            s!.emit('signal', { to: peerId, from: s!.id, signal: { candidate: event.candidate } });
           }
         };
 
@@ -132,43 +102,82 @@ export function useWebRTC(roomId: string, userId: string, userName: string) {
           setPeerStream(peerId, event.streams[0]);
         };
 
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
 
-        s.emit('signal', { to: peerId, from: s.id, signal: { type: 'answer', sdp: answer, userName } });
-      } else if (pc) {
-        if (signal.type === 'offer') {
+        // Tell them our name inside the signal or keep it simple.
+        s!.emit('signal', { to: peerId, from: s!.id, signal: { type: 'offer', sdp: offer, userName } });
+        
+        addPeer(peerId, pc, newUserName);
+      });
+
+      s.on('signal', async (data) => {
+        const { signal, from } = data;
+        const peerId = from;
+        
+        let pc = peersRef.current.find(p => p.peerId === peerId)?.pc;
+
+        if (!pc && signal.type === 'offer') {
+          // We are the new user receiving an offer
+          pc = new RTCPeerConnection(getIceConfig());
+          addPeer(peerId, pc, signal.userName);
+
+          if (localStreamRef.current) {
+            localStreamRef.current.getTracks().forEach(track => {
+              pc!.addTrack(track, localStreamRef.current!);
+            });
+          }
+
+          pc.onicecandidate = event => {
+            if (event.candidate) {
+              s!.emit('signal', { to: peerId, from: s!.id, signal: { candidate: event.candidate } });
+            }
+          };
+
+          pc.ontrack = event => {
+            setPeerStream(peerId, event.streams[0]);
+          };
+
           await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          s.emit('signal', { to: peerId, from: s.id, signal: { type: 'answer', sdp: answer, userName } });
-        } else if (signal.type === 'answer') {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-          setPeerName(peerId, signal.userName);
-        } else if (signal.candidate) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-          } catch (e) {
-            console.error('Error adding ICE candidate', e);
+
+          s!.emit('signal', { to: peerId, from: s!.id, signal: { type: 'answer', sdp: answer, userName } });
+        } else if (pc) {
+          if (signal.type === 'offer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            s!.emit('signal', { to: peerId, from: s!.id, signal: { type: 'answer', sdp: answer, userName } });
+          } else if (signal.type === 'answer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            setPeerName(peerId, signal.userName);
+          } else if (signal.candidate) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+            } catch (e) {
+              console.error('Error adding ICE candidate', e);
+            }
           }
         }
-      }
-    });
+      });
 
-    s.on('receive-message', (message) => {
-      setMessages(prev => [...prev, message]);
-    });
+      s.on('receive-message', (message) => {
+        setMessages(prev => [...prev, message]);
+      });
 
-    s.on('user-disconnected', ({ socketId }) => {
-      removePeer(socketId);
-    });
+      s.on('user-disconnected', ({ socketId }) => {
+        removePeer(socketId);
+      });
+    };
+
+    initMediaAndSocket();
 
     return () => {
       peersRef.current.forEach(p => p.pc.close());
       setPeers([]);
       peersRef.current = [];
-      s.disconnect();
+      if (s) s.disconnect();
     };
   }, [roomId, userId, userName, addPeer, setPeerName, setPeerStream]);
 
@@ -220,16 +229,33 @@ export function useWebRTC(roomId: string, userId: string, userName: string) {
     }
   };
 
-  const stopMedia = () => {
+  const stopMedia = async () => {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(t => t.stop());
+      localStreamRef.current = null;
+      setLocalStreamState(null);
       
       // Remove tracks from peer connections
       peersRef.current.forEach(peer => {
         peer.pc.getSenders().forEach(sender => peer.pc.removeTrack(sender));
       });
 
-      // Renegotiate after removal
+      // Try to get audio back
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        localStreamRef.current = stream;
+        setLocalStreamState(stream);
+        
+        peersRef.current.forEach(peer => {
+          stream.getTracks().forEach(track => {
+            peer.pc.addTrack(track, stream);
+          });
+        });
+      } catch (e) {
+        console.error('Failed to get mic back', e);
+      }
+
+      // Renegotiate
       peersRef.current.forEach(async (peer) => {
         const offer = await peer.pc.createOffer();
         await peer.pc.setLocalDescription(offer);
@@ -237,9 +263,6 @@ export function useWebRTC(roomId: string, userId: string, userName: string) {
           socketRef.current.emit('signal', { to: peer.peerId, from: socketRef.current.id, signal: { type: 'offer', sdp: offer, userName } });
         }
       });
-
-      localStreamRef.current = null;
-      setLocalStreamState(null);
     }
   };
 
