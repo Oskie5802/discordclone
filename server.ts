@@ -57,11 +57,10 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     // In production, serve the built static assets
-    // When esbuild builds server.js, it goes into /dist. So __dirname is /dist.
-    const clientDistPath = __dirname;
+    const clientDistPath = path.join(process.cwd(), 'dist');
     
     // Serve static files
-    app.use(express.static(clientDistPath, { index: false }));
+    app.use(express.static(clientDistPath));
     
     // SPA fallback
     app.get('*', (req, res) => {
